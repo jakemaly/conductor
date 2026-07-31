@@ -1,0 +1,29 @@
+id = "conductor.herdr"
+name = "Conductor Herdr"
+version = "0.1.0"
+min_herdr_version = "0.7.3"
+description = "Event-driven Pi crew state and dispatch for Conductor"
+platforms = ["linux", "macos"]
+
+[[startup]]
+command = ["node", "bin/conductor-herdr.mjs", "reconcile"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["node", "bin/conductor-herdr.mjs", "event"]
+
+[[events]]
+on = "pane.exited"
+command = ["node", "bin/conductor-herdr.mjs", "event"]
+
+[[actions]]
+id = "status"
+title = "Conductor: fleet status"
+contexts = ["workspace", "pane"]
+command = ["node", "bin/conductor-herdr.mjs", "status"]
+
+[[actions]]
+id = "reconcile"
+title = "Conductor: reconcile crew"
+contexts = ["workspace", "pane"]
+command = ["node", "bin/conductor-herdr.mjs", "reconcile"]
