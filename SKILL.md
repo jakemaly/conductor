@@ -179,16 +179,14 @@ Read output before closing. Advance sequential stages only when the previous
 result is credible. For parallel work, wait for every stage and summarize each
 result.
 
-After verification and a successful commit, remove the now-clean worktree:
+After reading and verifying a terminal worker, close only its pane. The Herdr
+plugin observes `pane.exited` and attempts safe cleanup of the completed
+worktree. It removes the worktree, not its branch, and never uses `--force`.
 
-```bash
-cyber-mux worktree remove <worktree-path>
-```
-
-This removes the worktree, not its branch. Never use `--force`. If removal
-fails, preserve the worktree and report why. Keep any worktree that is dirty,
-blocked, failed, explicitly uncommitted, or needed for review. Do not use broad
-`worktree prune`; cleanup must target the completed stage.
+If the worktree is dirty or removal fails, the plugin records `preserve` and
+reports the reason. Keep blocked, failed, explicitly uncommitted, or retained
+worktrees. Do not manually prune or use broad `worktree prune`; cleanup is
+runtime-enforced per completed stage.
 
 ## Reporting
 

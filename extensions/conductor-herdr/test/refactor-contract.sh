@@ -15,9 +15,17 @@ case "$1 $2" in
 esac
 EOF
 chmod +x "$tmp/herdr"
+cat >"$tmp/cyber-mux" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$HERDR_CYBER_MUX_CALLS"
+EOF
+chmod +x "$tmp/cyber-mux"
 export HERDR_BIN_PATH="$tmp/herdr"
+export CYBER_MUX_BIN_PATH="$tmp/cyber-mux"
 export HERDR_PLUGIN_STATE_DIR="$tmp/state"
 export HERDR_CALLS="$tmp/calls"
+export HERDR_CYBER_MUX_CALLS="$tmp/cyber-mux-calls"
 
 # Explicit registration must create workspace-scoped state.
 HERDR_WORKSPACE_ID=repo HERDR_TAB_ID=repo:t1 HERDR_PANE_ID=conductor:p1 \
@@ -95,6 +103,7 @@ if (s.workspaces.repo.tasks['stage-1'].status !== 'idle') throw new Error('pane 
 const calls = fs.readFileSync(process.env.HERDR_CALLS, 'utf8').split('\n').filter(Boolean);
 if (calls.filter((call) => call.startsWith('agent send conductor:p1 ')).length !== 1) throw new Error('pane exit sent duplicate wakeup');
 EOF
+if ! grep -q '^worktree remove /repo/.worktrees/stage-1$' "$HERDR_CYBER_MUX_CALLS"; then echo 'terminal pane exit did not trigger safe cleanup' >&2; exit 1; fi
 
 # Status must be a reconciled inventory of real Git worktrees plus Herdr facts.
 repo="$tmp/repo"

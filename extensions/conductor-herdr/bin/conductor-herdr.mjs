@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 
 const herdr = process.env.HERDR_BIN_PATH || "herdr";
 const git = process.env.GIT_BIN_PATH || "git";
+const cyberMux = process.env.CYBER_MUX_BIN_PATH || "cyber-mux";
 const pluginId = process.env.HERDR_PLUGIN_ID || "conductor.herdr";
 const stateHome = process.env.XDG_STATE_HOME || join(process.env.HOME || process.cwd(), ".local", "state");
 const stateDir = process.env.HERDR_PLUGIN_STATE_DIR || join(stateHome, "herdr", "plugins", pluginId);
@@ -59,16 +60,30 @@ function gitText(args, cwd) {
   return stdout;
 }
 
+function gitRootAt(cwd) {
+  try {
+    return gitText(["rev-parse", "--show-toplevel"], cwd);
+  } catch {
+    return null;
+  }
+}
+
 function repositoryRoot() {
   const context = parseContext();
   const cwd = process.env.CONDUCTOR_REPO_ROOT
     || context.workspace_cwd
     || context.focused_pane_cwd
     || process.cwd();
-  try {
-    return gitText(["rev-parse", "--show-toplevel"], cwd);
-  } catch {
-    return null;
+  return gitRootAt(cwd);
+}
+
+function removeWorktree(path, repoRoot) {
+  const result = spawnSync(cyberMux, ["worktree", "remove", path], {
+    cwd: repoRoot || gitRootAt(path) || process.cwd(),
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || `could not remove ${path}`).trim());
   }
 }
 
@@ -270,6 +285,25 @@ function submitPrompt(pane, text) {
   call(["pane", "send-keys", pane, "enter"], { json: false });
 }
 
+function recordCleanup(workspaceId, stage, path, result) {
+  withState((state) => {
+    const task = state.workspaces[workspaceId]?.tasks?.[stage];
+    const record = state.worktrees[path] ||= { path };
+    if (result.ok) {
+      record.present = false;
+      record.lifecycle = "removed";
+      record.cleanup = "removed";
+      record.removed_at = new Date().toISOString();
+      delete record.cleanup_error;
+      if (task) task.worktree_removed_at = record.removed_at;
+    } else {
+      record.cleanup = "preserve";
+      record.cleanup_error = result.error;
+    }
+    record.updated_at = new Date().toISOString();
+  });
+}
+
 function event() {
   let envelope;
   try {
@@ -279,12 +313,22 @@ function event() {
   }
   const data = envelope.data || envelope;
   const workspaceId = data.workspace_id;
-  const notification = withState((state) => {
+  const result = withState((state) => {
     const found = findTask(state, workspaceId, data.pane_id);
     if (!found) return null;
-    if (envelope.event === "pane.exited" && found.task.terminal_event) return null;
+    const exited = envelope.event === "pane.exited";
+    if (exited && found.task.terminal_event) {
+      if (found.task.worktree_removed_at || !["done", "idle"].includes(found.task.status)) return null;
+      return {
+        cleanup: {
+          stage: found.task.stage,
+          path: found.task.worktree,
+          repoRoot: state.worktrees[found.task.worktree]?.repo_root,
+        },
+      };
+    }
 
-    const status = data.agent_status || (envelope.event === "pane.exited" ? "unknown" : null);
+    const status = data.agent_status || (exited ? "unknown" : null);
     if (!status) return null;
     const eventKey = [envelope.event || data.type, workspaceId, data.pane_id, data.revision || "", status].join(":");
     if (found.task.last_event_key === eventKey) return null;
@@ -309,14 +353,27 @@ function event() {
     }
     if (!terminal.has(status) || !found.workspace.conductor_pane || found.workspace.conductor_pane === data.pane_id) return null;
     return {
-      pane: found.workspace.conductor_pane,
-      text: `Conductor event: stage ${found.task.stage} is ${status}; pane ${data.pane_id}; worktree ${found.task.worktree || "unknown"}. Read the worker output before advancing.`,
+      notification: {
+        pane: found.workspace.conductor_pane,
+        text: `Conductor event: stage ${found.task.stage} is ${status}; pane ${data.pane_id}; worktree ${found.task.worktree || "unknown"}. Read the worker output before advancing.`,
+      },
     };
   });
 
-  if (notification) {
+  if (result?.cleanup?.path) {
     try {
-      submitPrompt(notification.pane, notification.text);
+      removeWorktree(result.cleanup.path, result.cleanup.repoRoot);
+      recordCleanup(workspaceId, result.cleanup.stage, result.cleanup.path, { ok: true });
+    } catch (error) {
+      recordCleanup(workspaceId, result.cleanup.stage, result.cleanup.path, {
+        ok: false,
+        error: error.message || String(error),
+      });
+    }
+  }
+  if (result?.notification) {
+    try {
+      submitPrompt(result.notification.pane, result.notification.text);
     } catch (error) {
       console.error(error.message || error);
     }
@@ -362,7 +419,7 @@ function status(args) {
   if (!root) throw new Error("Conductor status requires the primary Pi pane to be inside a Git worktree");
   const state = reconcile(root);
   const worktrees = Object.values(state.worktrees)
-    .filter((worktree) => worktree.repo_root === root)
+    .filter((worktree) => worktree.repo_root === root && worktree.lifecycle !== "removed")
     .sort((a, b) => a.path.localeCompare(b.path));
   const result = {
     repo_root: root,
