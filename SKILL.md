@@ -42,13 +42,13 @@ running inside Herdr. Do not silently fall back to tmux.
 Turn the request into the smallest useful stages. Each stage gets one Pi pane
 and one isolated Herdr worktree.
 
-Create a pane/worktree in a separate Herdr workspace with:
+Create a pane/worktree in the current Herdr workspace and tab, split to the right with its own worktree:
 
 ```bash
 cyber-mux worktree add \
   --branch "conductor/<short-stage-name>" \
   --label "conductor-<short-stage-name>" \
-  --at workspace \
+  --at pane:right \
   --launch "pi"
 ```
 
@@ -72,7 +72,7 @@ The brief must include:
 4. How the agent should report done, blocked, or failed.
 5. A request not to merge or destroy work.
 
-For parallel work, create all independent workspaces first, focus the first or most relevant pane, then submit all briefs. The other workspaces remain available through Herdr and `cyber-mux list`.
+For parallel work, create all independent right-hand panes first, focus the first or most relevant pane, then submit all briefs. Keep them in the current workspace and tab.
 Do not parallelize stages with dependencies.
 
 ## Supervision
