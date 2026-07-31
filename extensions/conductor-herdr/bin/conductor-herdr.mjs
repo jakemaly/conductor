@@ -8,7 +8,9 @@ const pluginId = process.env.HERDR_PLUGIN_ID || "conductor.herdr";
 const stateHome = process.env.XDG_STATE_HOME || join(process.env.HOME || process.cwd(), ".local", "state");
 const stateDir = process.env.HERDR_PLUGIN_STATE_DIR || join(stateHome, "herdr", "plugins", pluginId);
 const statePath = join(stateDir, "conductor.json");
-const terminal = new Set(["done", "blocked", "unknown"]);
+// A registered worker's working -> idle is its normal Pi completion signal in Herdr 0.7.3.
+// Do not apply this to unregistered panes; event() only finds registered tasks.
+const terminal = new Set(["done", "idle", "blocked", "unknown"]);
 
 function call(args, { json = true } = {}) {
   const result = spawnSync(herdr, args, { encoding: "utf8" });
@@ -124,6 +126,7 @@ function event() {
   const found = findTask(state, workspaceId, data.pane_id);
   if (!found) return;
 
+  if (envelope.event === "pane.exited" && found.task.terminal_event) return;
   const status = data.agent_status || (envelope.event === "pane.exited" ? "unknown" : null);
   if (!status) return;
   const eventKey = [envelope.event || data.type, workspaceId, data.pane_id, data.revision || "", status].join(":");

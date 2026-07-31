@@ -43,7 +43,7 @@ EOF
 HERDR_WORKSPACE_ID=repo HERDR_TAB_ID=repo:t1 HERDR_PANE_ID=conductor:p1 \
   node "$root/bin/conductor-herdr.mjs" register \
   stage-1 worker:p1 /repo/.worktrees/stage-1 conductor/stage-1 crew:p1
-export HERDR_PLUGIN_EVENT_JSON='{"event":"pane.agent_status_changed","data":{"workspace_id":"repo","pane_id":"worker:p1","agent_status":"done","revision":7}}'
+export HERDR_PLUGIN_EVENT_JSON='{"event":"pane.agent_status_changed","data":{"workspace_id":"repo","pane_id":"worker:p1","agent_status":"idle","revision":7}}'
 node "$root/bin/conductor-herdr.mjs" event
 if ! grep -q '^agent send conductor:p1 ' "$HERDR_CALLS"; then echo 'missing wakeup text' >&2; exit 1; fi
 if ! grep -q '^pane send-keys conductor:p1 enter$' "$HERDR_CALLS"; then echo 'wakeup text was not submitted' >&2; exit 1; fi
@@ -53,7 +53,18 @@ node "$root/bin/conductor-herdr.mjs" reconcile
 node - <<'EOF'
 const fs = require('node:fs');
 const s = JSON.parse(fs.readFileSync(process.env.HERDR_PLUGIN_STATE_DIR + '/conductor.json'));
-if (s.workspaces.repo.tasks['stage-1'].status !== 'done') throw new Error('reconcile downgraded done to idle');
+if (s.workspaces.repo.tasks['stage-1'].status !== 'idle') throw new Error('reconcile downgraded completed idle to another state');
+EOF
+
+# Closing a completed pane must not replace its completion with unknown.
+export HERDR_PLUGIN_EVENT_JSON='{"event":"pane.exited","data":{"workspace_id":"repo","pane_id":"worker:p1"}}'
+node "$root/bin/conductor-herdr.mjs" event
+node - <<'EOF'
+const fs = require('node:fs');
+const s = JSON.parse(fs.readFileSync(process.env.HERDR_PLUGIN_STATE_DIR + '/conductor.json'));
+if (s.workspaces.repo.tasks['stage-1'].status !== 'idle') throw new Error('pane exit downgraded completed task');
+const calls = fs.readFileSync(process.env.HERDR_CALLS, 'utf8').split('\n').filter(Boolean);
+if (calls.filter((call) => call.startsWith('agent send conductor:p1 ')).length !== 1) throw new Error('pane exit sent duplicate wakeup');
 EOF
 
 echo 'refactor contract: ok'

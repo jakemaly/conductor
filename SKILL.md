@@ -144,8 +144,9 @@ For internal diagnostics only:
 node "$PLUGIN_ROOT/bin/conductor-herdr.mjs" status
 ```
 
-Use the Herdr agent status as the primary lifecycle signal. When the plugin
-reports a terminal state, read the pane:
+Use the Herdr agent status as the primary lifecycle signal. Herdr 0.7.3 has no
+`herdr agent status` command; use the plugin event or `herdr agent read` instead.
+When the plugin reports a terminal state, read the pane:
 
 ```bash
 herdr agent read <pane-id> --source recent --lines 120
