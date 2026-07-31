@@ -4,7 +4,7 @@ description: >-
   Orchestrate multiple Pi agents through Herdr panes. Use when the user asks to
   delegate, coordinate, supervise, or run work with multiple agents. Default to
   sequential stages; run independent stages in parallel when the user asks.
-compatibility: Requires Pi running inside Herdr and the `conductor.herdr` plugin.
+compatibility: Requires Pi running inside Herdr, `cyber-mux`, and the `conductor.herdr` plugin.
 ---
 
 # Conductor
@@ -22,13 +22,13 @@ The user interacts only through Pi:
 Natural-language requests in the primary Pi pane are equivalent. Do not ask the
 user to run plugin scripts, `herdr` commands, polling loops, or state-file
 inspection commands. Those are internal runtime details. Plan the smallest
-stages, dispatch them through the linked `conductor.herdr` plugin, and report
+stages, dispatch them through the Herdr-backed `cyber-mux` path, and report
 compact stage/blocker updates in this conversation.
 
 ## Rules
 
 - Spawn **Pi only**. Do not launch Claude, Codex, or another harness.
-- Use Herdr as the session backend through the `conductor.herdr` plugin.
+- Use Herdr as the session backend through `cyber-mux` and the `conductor.herdr` event bridge.
 - Use Herdr-native worktrees; do not manually split panes or invent a second
   worktree system.
 - Default to sequential stages. Use parallel panes only when the user asks for
@@ -45,19 +45,25 @@ compact stage/blocker updates in this conversation.
 
 ## Start-up check
 
-Verify Herdr and the linked runtime plugin:
+Verify the real runtime prerequisites:
 
 ```bash
+cyber-mux doctor
 herdr status server
+herdr integration status
 herdr plugin list --json
-herdr plugin action invoke conductor.herdr.status
+git rev-parse --show-toplevel
 ```
 
-If the server is unavailable or `conductor.herdr` is disabled/missing, stop and
-report the exact setup problem. Do not silently fall back to tmux or polling.
+Require the backend to be Herdr, Pi's lifecycle integration to be installed,
+the primary Conductor Pi pane to be inside the target Git repository, and
+`conductor.herdr` to be enabled. If any prerequisite is missing, report the
+exact setup problem and do not dispatch. Do not silently fall back to tmux or
+screen polling.
 
-The plugin owns durable fleet state and native lifecycle events. Herdr is the
-source of truth for live pane/agent/worktree facts.
+`cyber-mux` owns dispatch/layout/prompt submission. The plugin owns only durable
+workspace-scoped task state and native lifecycle events. Herdr is authoritative
+for live pane/agent/worktree facts.
 
 ## Dispatch
 
@@ -71,21 +77,50 @@ Keep a single layout anchor for the crew:
 - Every later agent splits down from `crew_anchor` with `--at pane:down`.
 - Do not focus worker panes; leave the user's active view on Conductor.
 
-Dispatch through the linked plugin. It creates the Herdr worktree, moves its
-root pane into the Conductor tab, preserves the right/down crew layout, launches
-Pi, persists the mapping, and submits the brief:
+Dispatch through the proven Herdr-backed `cyber-mux` path:
+
+```bash
+cyber-mux worktree add \
+  --branch "conductor/<short-stage-name>" \
+  --label "conductor-<short-stage-name>" \
+  --at pane:right \
+  --launch "pi" \
+  --format json
+```
+
+For later workers, pin the split to the stable anchor:
+
+```bash
+CYBER_MUX=herdr CYBER_MUX_PANE=<crew_anchor> \
+  cyber-mux worktree add \
+  --branch "conductor/<short-stage-name>" \
+  --label "conductor-<short-stage-name>" \
+  --at pane:down \
+  --launch "pi" \
+  --format json
+```
+
+Use the returned pane/worktree/branch values, then submit the brief:
+
+```bash
+cyber-mux submit <pane-id> '<brief>'
+```
+
+After successful submission, register the mapping internally. Never register
+before dispatch and submission succeed:
 
 ```bash
 PLUGIN_ROOT=$(herdr plugin list --json | jq -r \
   '.result.plugins[] | select(.plugin_id == "conductor.herdr") | .plugin_root')
-node "$PLUGIN_ROOT/bin/conductor-herdr.mjs" dispatch \
-  <short-stage-name> \
-  "conductor/<short-stage-name>" \
-  '<brief>'
+node "$PLUGIN_ROOT/bin/conductor-herdr.mjs" register \
+  <short-stage-name> <pane-id> <worktree-path> \
+  "conductor/<short-stage-name>" <crew-anchor>
 ```
 
-The first worker targets Conductor with `pane:right`; later workers target the
-stable `crew_anchor` with `pane:down`. Do not focus workers.
+`HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and `HERDR_PANE_ID` come from the primary
+Pi pane. Registration fails rather than guessing a focused workspace.
+The first worker is right of Conductor; later workers are below `crew_anchor`.
+Do not focus workers.
 
 The brief must include:
 
@@ -100,13 +135,13 @@ For parallel work, create all independent panes first: one right-hand anchor, th
 ## Supervision
 
 Do not run a polling loop. The plugin subscribes to Herdr's native
-`pane.agent_status_changed` and `pane.exited` events, persists state, and wakes
-Conductor for `done`, `blocked`, `unknown`, or exited workers.
+`pane.agent_status_changed` and `pane.exited` events, persists workspace-scoped
+state, and wakes Conductor for `done`, `blocked`, `unknown`, or exited workers.
 
-For an on-demand snapshot, invoke:
+For internal diagnostics only:
 
 ```bash
-herdr plugin action invoke conductor.herdr.status
+node "$PLUGIN_ROOT/bin/conductor-herdr.mjs" status
 ```
 
 Use the Herdr agent status as the primary lifecycle signal. When the plugin
@@ -131,16 +166,10 @@ Closing the pane does not remove the worktree. This is the default because the
 worktree may contain unmerged changes awaiting review, a blocked merge, a
 handoff, or later inspection.
 
-To park or explicitly reuse a worktree, call the plugin directly:
-
-```bash
-node "$PLUGIN_ROOT/bin/conductor-herdr.mjs" park <stage>
-node "$PLUGIN_ROOT/bin/conductor-herdr.mjs" reuse <stage>
-```
-
-Parking closes only the pane and preserves the worktree/branch. Reuse opens the
-same worktree in a fresh Pi pane. There is no cleanup action by default; remove
-worktrees only after explicit approval using Herdr's safety checks, never force.
+When an agent reaches a terminal state, close only the pane after reading its
+final output. Preserve the worktree and branch by default. Reopen parked work
+through the existing `cyber-mux worktree open` path only for an explicit follow-up.
+There is no plugin cleanup action; never force-delete a worktree.
 
 Advance sequential stages only after the prior stage is done and its output is
 credible. For parallel stages, wait until every stage is terminal, then
