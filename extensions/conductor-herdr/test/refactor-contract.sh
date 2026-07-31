@@ -38,6 +38,26 @@ const s = JSON.parse(fs.readFileSync(process.env.HERDR_PLUGIN_STATE_DIR + '/cond
 if (s.workspaces.repo.crew_anchor !== 'crew:p2') throw new Error('new crew did not replace stale anchor');
 EOF
 
+# Concurrent event/registration processes must not lose either task.
+for attempt in $(seq 1 10); do
+  rm -rf "$HERDR_PLUGIN_STATE_DIR"; mkdir -p "$HERDR_PLUGIN_STATE_DIR"
+  HERDR_WORKSPACE_ID=repo HERDR_TAB_ID=repo:t1 HERDR_PANE_ID=conductor:p1 \
+    node "$root/bin/conductor-herdr.mjs" register \
+    parallel-a worker:a /repo/.worktrees/a conductor/parallel-a crew:a >/dev/null &
+  pid_a=$!
+  HERDR_WORKSPACE_ID=repo HERDR_TAB_ID=repo:t1 HERDR_PANE_ID=conductor:p1 \
+    node "$root/bin/conductor-herdr.mjs" register \
+    parallel-b worker:b /repo/.worktrees/b conductor/parallel-b crew:a >/dev/null &
+  pid_b=$!
+  wait "$pid_a" "$pid_b"
+  node - <<'EOF'
+const fs = require('node:fs');
+const s = JSON.parse(fs.readFileSync(process.env.HERDR_PLUGIN_STATE_DIR + '/conductor.json'));
+const tasks = s.workspaces.repo?.tasks || {};
+if (!tasks['parallel-a'] || !tasks['parallel-b']) throw new Error('concurrent registration lost a task');
+EOF
+done
+
 # Reconciliation must not invent a workspace from focused global state.
 rm -rf "$HERDR_PLUGIN_STATE_DIR"; mkdir -p "$HERDR_PLUGIN_STATE_DIR"
 node "$root/bin/conductor-herdr.mjs" reconcile

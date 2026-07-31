@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -8,6 +8,7 @@ const pluginId = process.env.HERDR_PLUGIN_ID || "conductor.herdr";
 const stateHome = process.env.XDG_STATE_HOME || join(process.env.HOME || process.cwd(), ".local", "state");
 const stateDir = process.env.HERDR_PLUGIN_STATE_DIR || join(stateHome, "herdr", "plugins", pluginId);
 const statePath = join(stateDir, "conductor.json");
+const lockPath = `${statePath}.lock`;
 // A registered worker's working -> idle is its normal Pi completion signal in Herdr 0.7.3.
 // Do not apply this to unregistered panes; event() only finds registered tasks.
 const terminal = new Set(["done", "idle", "blocked", "unknown"]);
@@ -39,10 +40,44 @@ function load() {
 }
 
 function save(state) {
-  mkdirSync(dirname(statePath), { recursive: true });
   const temporary = `${statePath}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`);
   renameSync(temporary, statePath);
+}
+
+function pause(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function withState(update) {
+  mkdirSync(dirname(statePath), { recursive: true });
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    try {
+      mkdirSync(lockPath);
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > 30_000) {
+          rmSync(lockPath, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        // The owner may be between mkdir and its first write.
+      }
+      pause(10);
+    }
+    if (attempt === 299) throw new Error("timed out waiting for Conductor state lock");
+  }
+
+  try {
+    const state = load();
+    const result = update(state);
+    save(state);
+    return result;
+  } finally {
+    rmSync(lockPath, { recursive: true, force: true });
+  }
 }
 
 function parseContext() {
@@ -67,29 +102,29 @@ function snapshot() {
 }
 
 function reconcile() {
-  const state = load();
   const panes = new Map((snapshot().panes || []).map((pane) => [
     `${pane.workspace_id}:${pane.pane_id}`,
     pane,
   ]));
 
-  for (const [workspaceId, workspace] of Object.entries(state.workspaces)) {
-    for (const task of Object.values(workspace.tasks)) {
-      const pane = panes.get(`${workspaceId}:${task.pane}`);
-      if (!pane) {
-        if (!task.terminal_event) task.status = "unknown";
-        continue;
+  return withState((state) => {
+    for (const [workspaceId, workspace] of Object.entries(state.workspaces)) {
+      for (const task of Object.values(workspace.tasks)) {
+        const pane = panes.get(`${workspaceId}:${task.pane}`);
+        if (!pane) {
+          if (!task.terminal_event) task.status = "unknown";
+          continue;
+        }
+        // A terminal event remains authoritative while Herdr's derived snapshot is idle.
+        if (task.terminal_event && pane.agent_status === "idle") continue;
+        if (pane.agent_status === "working") delete task.terminal_event;
+        task.status = pane.agent_status || "unknown";
+        task.cwd = pane.cwd || task.cwd;
+        task.tab_id = pane.tab_id || task.tab_id;
       }
-      // A terminal event remains authoritative while Herdr's derived snapshot is idle.
-      if (task.terminal_event && pane.agent_status === "idle") continue;
-      if (pane.agent_status === "working") delete task.terminal_event;
-      task.status = pane.agent_status || "unknown";
-      task.cwd = pane.cwd || task.cwd;
-      task.tab_id = pane.tab_id || task.tab_id;
     }
-  }
-  save(state);
-  return state;
+    return state;
+  });
 }
 
 function findTask(state, workspaceId, paneId) {
@@ -114,7 +149,6 @@ function submitPrompt(pane, text) {
 }
 
 function event() {
-  const state = load();
   let envelope;
   try {
     envelope = JSON.parse(process.env.HERDR_PLUGIN_EVENT_JSON || "{}");
@@ -123,26 +157,31 @@ function event() {
   }
   const data = envelope.data || envelope;
   const workspaceId = data.workspace_id;
-  const found = findTask(state, workspaceId, data.pane_id);
-  if (!found) return;
+  const notification = withState((state) => {
+    const found = findTask(state, workspaceId, data.pane_id);
+    if (!found) return null;
+    if (envelope.event === "pane.exited" && found.task.terminal_event) return null;
 
-  if (envelope.event === "pane.exited" && found.task.terminal_event) return;
-  const status = data.agent_status || (envelope.event === "pane.exited" ? "unknown" : null);
-  if (!status) return;
-  const eventKey = [envelope.event || data.type, workspaceId, data.pane_id, data.revision || "", status].join(":");
-  if (found.task.last_event_key === eventKey) return;
+    const status = data.agent_status || (envelope.event === "pane.exited" ? "unknown" : null);
+    if (!status) return null;
+    const eventKey = [envelope.event || data.type, workspaceId, data.pane_id, data.revision || "", status].join(":");
+    if (found.task.last_event_key === eventKey) return null;
 
-  found.task.status = status;
-  found.task.last_event_key = eventKey;
-  found.task.updated_at = new Date().toISOString();
-  if (terminal.has(status)) found.task.terminal_event = eventKey;
-  else delete found.task.terminal_event;
-  save(state);
+    found.task.status = status;
+    found.task.last_event_key = eventKey;
+    found.task.updated_at = new Date().toISOString();
+    if (terminal.has(status)) found.task.terminal_event = eventKey;
+    else delete found.task.terminal_event;
+    if (!terminal.has(status) || !found.workspace.conductor_pane || found.workspace.conductor_pane === data.pane_id) return null;
+    return {
+      pane: found.workspace.conductor_pane,
+      text: `Conductor event: stage ${found.task.stage} is ${status}; pane ${data.pane_id}; worktree ${found.task.worktree || "unknown"}. Read the worker output before advancing.`,
+    };
+  });
 
-  if (terminal.has(status) && found.workspace.conductor_pane && found.workspace.conductor_pane !== data.pane_id) {
-    const text = `Conductor event: stage ${found.task.stage} is ${status}; pane ${data.pane_id}; worktree ${found.task.worktree || "unknown"}. Read the worker output before advancing.`;
+  if (notification) {
     try {
-      submitPrompt(found.workspace.conductor_pane, text);
+      submitPrompt(notification.pane, notification.text);
     } catch (error) {
       console.error(error.message || error);
     }
@@ -159,27 +198,28 @@ function register(args) {
     throw new Error("Conductor registration requires HERDR_WORKSPACE_ID, HERDR_TAB_ID, and HERDR_PANE_ID");
   }
 
-  const state = load();
-  const workspace = state.workspaces[context.workspaceId] ||= {
-    workspace_id: context.workspaceId,
-    tab_id: context.tabId,
-    conductor_pane: context.paneId,
-    crew_anchor: crewAnchor || pane,
-    tasks: {},
-  };
-  workspace.tab_id = context.tabId;
-  workspace.conductor_pane = context.paneId;
-  workspace.crew_anchor = crewAnchor || workspace.crew_anchor || pane;
-  workspace.tasks[stage] = {
-    stage,
-    pane,
-    worktree,
-    branch,
-    status: "working",
-    created_at: new Date().toISOString(),
-  };
-  save(state);
-  console.log(JSON.stringify(workspace.tasks[stage]));
+  const task = withState((state) => {
+    const workspace = state.workspaces[context.workspaceId] ||= {
+      workspace_id: context.workspaceId,
+      tab_id: context.tabId,
+      conductor_pane: context.paneId,
+      crew_anchor: crewAnchor || pane,
+      tasks: {},
+    };
+    workspace.tab_id = context.tabId;
+    workspace.conductor_pane = context.paneId;
+    workspace.crew_anchor = crewAnchor || workspace.crew_anchor || pane;
+    workspace.tasks[stage] = {
+      stage,
+      pane,
+      worktree,
+      branch,
+      status: "working",
+      created_at: new Date().toISOString(),
+    };
+    return workspace.tasks[stage];
+  });
+  console.log(JSON.stringify(task));
 }
 
 function status() {
