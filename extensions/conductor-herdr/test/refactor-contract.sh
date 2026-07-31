@@ -14,6 +14,16 @@ export HERDR_PLUGIN_STATE_DIR="$tmp/state"
 export HERDR_CALLS="$tmp/calls"
 unset HERDR_WORKSPACE_ID HERDR_TAB_ID HERDR_PANE_ID HERDR_PLUGIN_CONTEXT_JSON
 
+skill="$root/../../SKILL.md"
+grep -Fq "PARENT_PANE=\$(cyber-mux doctor --format json | jq -er '.pane')" "$skill" || {
+  echo 'skill does not capture the parent pane explicitly' >&2
+  exit 1
+}
+grep -Fq 'CYBER_MUX=herdr CYBER_MUX_PANE="$PARENT_PANE"' "$skill" || {
+  echo 'skill does not anchor the first worker to the parent pane' >&2
+  exit 1
+}
+
 # Registration requires explicit parent context and stores only the worker bridge.
 HERDR_WORKSPACE_ID=repo HERDR_TAB_ID=repo:t1 HERDR_PANE_ID=conductor:p1 \
   node "$root/bin/conductor-herdr.mjs" register \

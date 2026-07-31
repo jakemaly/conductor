@@ -14,7 +14,7 @@ written. Keep the parent Pi focused.
 Run internally:
 
 ```bash
-cyber-mux doctor
+cyber-mux doctor --format json
 herdr status server
 herdr integration status
 herdr plugin list --json
@@ -22,7 +22,8 @@ git rev-parse --show-toplevel
 ```
 
 Dispatch only when Herdr-backed `cyber-mux`, Pi's Herdr integration, and the
-enabled `conductor.herdr` plugin are available in a Git worktree.
+enabled `conductor.herdr` plugin are available in a Git worktree. Capture the
+parent pane from the doctor result before dispatching.
 
 ## Dispatch
 
@@ -30,12 +31,14 @@ Create one worktree and Pi pane per worker. Put the first to the right of the
 parent:
 
 ```bash
-cyber-mux worktree add \
-  --branch "conductor/<short-name>" \
-  --label "conductor-<short-name>" \
-  --at pane:right \
-  --launch "pi" \
-  --format json
+PARENT_PANE=$(cyber-mux doctor --format json | jq -er '.pane')
+CYBER_MUX=herdr CYBER_MUX_PANE="$PARENT_PANE" \
+  cyber-mux worktree add \
+    --branch "conductor/<short-name>" \
+    --label "conductor-<short-name>" \
+    --at pane:right \
+    --launch "pi" \
+    --format json
 ```
 
 Put later workers below the first worker:
