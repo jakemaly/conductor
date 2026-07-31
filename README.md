@@ -15,5 +15,6 @@ Delegate independent tasks to Pi sub-agents in isolated Git worktrees.
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 curl -fsSL https://herdr.dev/install.sh | sh
 npm install -g cyber-mux
-herdr plugin link ./extensions/conductor-herdr
+git clone https://github.com/jakemaly/conductor.git ~/.conductor
+herdr plugin link ~/.conductor/extensions/conductor-herdr
 ```
