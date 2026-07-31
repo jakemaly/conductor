@@ -29,6 +29,14 @@ const w = s.workspaces?.repo;
 if (!w || w.conductor_pane !== 'conductor:p1' || w.crew_anchor !== 'crew:p1') throw new Error('registration is not workspace-scoped');
 if (w.tasks['stage-1']?.status !== 'working') throw new Error('registration did not create working task');
 EOF
+HERDR_WORKSPACE_ID=repo HERDR_TAB_ID=repo:t1 HERDR_PANE_ID=conductor:p1 \
+  node "$root/bin/conductor-herdr.mjs" register \
+  stage-2 worker:p2 /repo/.worktrees/stage-2 conductor/stage-2 crew:p2
+node - <<'EOF'
+const fs = require('node:fs');
+const s = JSON.parse(fs.readFileSync(process.env.HERDR_PLUGIN_STATE_DIR + '/conductor.json'));
+if (s.workspaces.repo.crew_anchor !== 'crew:p2') throw new Error('new crew did not replace stale anchor');
+EOF
 
 # Reconciliation must not invent a workspace from focused global state.
 rm -rf "$HERDR_PLUGIN_STATE_DIR"; mkdir -p "$HERDR_PLUGIN_STATE_DIR"

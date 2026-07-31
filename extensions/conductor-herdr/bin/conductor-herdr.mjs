@@ -169,7 +169,7 @@ function register(args) {
   };
   workspace.tab_id = context.tabId;
   workspace.conductor_pane = context.paneId;
-  workspace.crew_anchor ||= crewAnchor || pane;
+  workspace.crew_anchor = crewAnchor || workspace.crew_anchor || pane;
   workspace.tasks[stage] = {
     stage,
     pane,
