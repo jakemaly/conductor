@@ -1,19 +1,19 @@
 # Conductor
+Ask: `Spawn two agents: one handles the API and one handles the UI.`
 
-Delegate named tasks to Pi sub-agents in isolated Git worktrees.
+Delegate independent tasks to Pi sub-agents in isolated Git worktrees.
 
 ## Dependencies
-
-- Pi inside Herdr with its integration enabled
-- Herdr-backed `cyber-mux`
-- Enabled `conductor.herdr` plugin
+- [Pi](https://github.com/earendil-works/pi) inside Herdr
+- [Herdr](https://herdr.dev) with its Pi integration
+- [cyber-mux](https://github.com/cyberuni/cyber-mux)
+- The `conductor.herdr` plugin
 - A Git repository/worktree
 
-## Use case
-
-Use it when independent tasks can be handled by separate Pi agents. Each gets
-its own pane, worktree, and `conductor/<name>` branch.
-
-## How to use
-
-Ask in natural language, for example: `Spawn two agents: one handles the API and one handles the UI.` Conductor launches them and leaves panes and worktrees available.
+## Install
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+curl -fsSL https://herdr.dev/install.sh | sh
+npm install -g cyber-mux
+herdr plugin link ./extensions/conductor-herdr
+```
