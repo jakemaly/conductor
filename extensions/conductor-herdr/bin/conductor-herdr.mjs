@@ -4,15 +4,11 @@ import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const herdr = process.env.HERDR_BIN_PATH || "herdr";
-const git = process.env.GIT_BIN_PATH || "git";
-const cyberMux = process.env.CYBER_MUX_BIN_PATH || "cyber-mux";
 const pluginId = process.env.HERDR_PLUGIN_ID || "conductor.herdr";
 const stateHome = process.env.XDG_STATE_HOME || join(process.env.HOME || process.cwd(), ".local", "state");
 const stateDir = process.env.HERDR_PLUGIN_STATE_DIR || join(stateHome, "herdr", "plugins", pluginId);
 const statePath = join(stateDir, "conductor.json");
 const lockPath = `${statePath}.lock`;
-// A registered worker's working -> idle is its normal Pi completion signal in Herdr 0.7.3.
-// Do not apply this to unregistered panes; event() only finds registered tasks.
 const terminal = new Set(["done", "idle", "blocked", "unknown"]);
 
 function call(args, { json = true } = {}) {
@@ -30,18 +26,15 @@ function call(args, { json = true } = {}) {
 }
 
 function emptyState() {
-  return { version: 2, workspaces: {}, worktrees: {} };
+  return { version: 1, workers: {} };
 }
 
 function load() {
   if (!existsSync(statePath)) return emptyState();
   const state = JSON.parse(readFileSync(statePath, "utf8"));
-  if (state.workspaces && typeof state.workspaces === "object") {
-    state.version = 2;
-    state.worktrees ||= {};
-    return state;
-  }
-  // Old state guessed a single focused workspace. It is unsafe to migrate.
+  if (state.workers && typeof state.workers === "object") return state;
+  // The old state tracked inventory and lifecycle policy; it is intentionally not
+  // part of this thin sub-agent bridge.
   return emptyState();
 }
 
@@ -49,134 +42,6 @@ function save(state) {
   const temporary = `${statePath}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`);
   renameSync(temporary, statePath);
-}
-
-function gitText(args, cwd) {
-  const result = spawnSync(git, args, { cwd, encoding: "utf8" });
-  const stdout = (result.stdout || "").trim();
-  if (result.status !== 0) {
-    throw new Error((result.stderr || stdout || `git ${args.join(" ")} failed`).trim());
-  }
-  return stdout;
-}
-
-function gitRootAt(cwd) {
-  try {
-    return gitText(["rev-parse", "--show-toplevel"], cwd);
-  } catch {
-    return null;
-  }
-}
-
-function repositoryRoot() {
-  const context = parseContext();
-  const cwd = process.env.CONDUCTOR_REPO_ROOT
-    || context.workspace_cwd
-    || context.focused_pane_cwd
-    || process.cwd();
-  return gitRootAt(cwd);
-}
-
-function removeWorktree(path, repoRoot) {
-  const result = spawnSync(cyberMux, ["worktree", "remove", path], {
-    cwd: repoRoot || gitRootAt(path) || process.cwd(),
-    encoding: "utf8",
-  });
-  if (result.status !== 0) {
-    throw new Error((result.stderr || result.stdout || `could not remove ${path}`).trim());
-  }
-}
-
-function gitWorktrees(root) {
-  const records = [];
-  let record;
-  const flush = () => {
-    if (!record) return;
-    try {
-      record.changes = gitText(["status", "--porcelain", "--untracked-files=all"], record.path);
-      record.dirty = Boolean(record.changes);
-      record.present = true;
-    } catch {
-      record.present = false;
-      record.dirty = null;
-      record.changes = null;
-    }
-    records.push(record);
-    record = undefined;
-  };
-
-  for (const line of gitText(["worktree", "list", "--porcelain"], root).split("\n")) {
-    if (!line) {
-      flush();
-      continue;
-    }
-    if (line.startsWith("worktree ")) {
-      flush();
-      record = { path: line.slice(9), repo_root: root };
-    } else if (record && line.startsWith("HEAD ")) {
-      record.head = line.slice(5);
-    } else if (record && line.startsWith("branch ")) {
-      record.branch = line.slice(7).replace(/^refs\/heads\//, "");
-    } else if (record && line === "detached") {
-      record.branch = null;
-    } else if (record && line.startsWith("prunable ")) {
-      record.prunable = true;
-    }
-  }
-  flush();
-  return records;
-}
-
-function paneForPath(panes, path) {
-  return panes.find((pane) => pane.cwd === path)
-    || panes.find((pane) => pane.cwd?.startsWith(`${path}/`));
-}
-
-function taskForPath(state, path) {
-  for (const [workspaceId, workspace] of Object.entries(state.workspaces)) {
-    for (const task of Object.values(workspace.tasks)) {
-      if (task.worktree === path) return { workspaceId, workspace, task };
-    }
-  }
-  return null;
-}
-
-function taskLifecycle(task) {
-  if (!task) return "unmanaged";
-  if (task.status === "blocked") return "blocked";
-  if (task.status === "unknown") return "unknown";
-  if (terminal.has(task.status)) return "terminal";
-  return "working";
-}
-
-function mergeInventory(state, facts, panes) {
-  const seen = new Set();
-  for (const fact of facts) {
-    const match = taskForPath(state, fact.path);
-    const pane = paneForPath(panes, fact.path);
-    const task = match?.task;
-    const record = state.worktrees[fact.path] || {};
-    Object.assign(record, fact, {
-      managed: Boolean(task),
-      stage: task?.stage,
-      workspace_id: match?.workspaceId || pane?.workspace_id,
-      tab_id: match?.workspace?.tab_id || pane?.tab_id,
-      pane_id: task?.pane || pane?.pane_id,
-      agent_status: pane?.agent_status || task?.status,
-      lifecycle: taskLifecycle(task),
-      cleanup: task && terminal.has(task.status) && !fact.dirty ? "candidate" : "preserve",
-      updated_at: new Date().toISOString(),
-    });
-    state.worktrees[fact.path] = record;
-    seen.add(fact.path);
-  }
-  for (const record of Object.values(state.worktrees)) {
-    if (!seen.has(record.path) && !record.removed_at) {
-      record.present = false;
-      record.lifecycle = "orphaned";
-      record.cleanup = "preserve";
-    }
-  }
 }
 
 function pause(ms) {
@@ -231,77 +96,8 @@ function invocationContext() {
   };
 }
 
-function snapshot() {
-  return call(["api", "snapshot"]).result?.snapshot || {};
-}
-
-function reconcile(root = repositoryRoot()) {
-  const panes = snapshot().panes || [];
-  const paneMap = new Map(panes.map((pane) => [
-    `${pane.workspace_id}:${pane.pane_id}`,
-    pane,
-  ]));
-  const facts = root ? gitWorktrees(root) : [];
-
-  return withState((state) => {
-    for (const [workspaceId, workspace] of Object.entries(state.workspaces)) {
-      for (const task of Object.values(workspace.tasks)) {
-        const pane = paneMap.get(`${workspaceId}:${task.pane}`);
-        if (!pane) {
-          if (!task.terminal_event) task.status = "unknown";
-          continue;
-        }
-        // A terminal event remains authoritative while Herdr's derived snapshot is idle.
-        if (task.terminal_event && pane.agent_status === "idle") continue;
-        if (pane.agent_status === "working") delete task.terminal_event;
-        task.status = pane.agent_status || "unknown";
-        task.cwd = pane.cwd || task.cwd;
-        task.tab_id = pane.tab_id || task.tab_id;
-      }
-    }
-    if (root) mergeInventory(state, facts, panes);
-    return state;
-  });
-}
-
-function findTask(state, workspaceId, paneId) {
-  if (workspaceId && state.workspaces[workspaceId]) {
-    const task = Object.values(state.workspaces[workspaceId].tasks)
-      .find((candidate) => candidate.pane === paneId);
-    if (task) return { workspace: state.workspaces[workspaceId], task };
-  }
-  const matches = [];
-  for (const workspace of Object.values(state.workspaces)) {
-    const task = Object.values(workspace.tasks).find((candidate) => candidate.pane === paneId);
-    if (task) matches.push({ workspace, task });
-  }
-  return matches.length === 1 ? matches[0] : null;
-}
-
-function submitPrompt(pane, text) {
-  // Herdr 0.7.3 exposes literal agent.send, not agent.prompt. Submit the
-  // literal text explicitly so it does not remain in Pi's input box.
-  call(["agent", "send", pane, text], { json: false });
-  call(["pane", "send-keys", pane, "enter"], { json: false });
-}
-
-function recordCleanup(workspaceId, stage, path, result) {
-  withState((state) => {
-    const task = state.workspaces[workspaceId]?.tasks?.[stage];
-    const record = state.worktrees[path] ||= { path };
-    if (result.ok) {
-      record.present = false;
-      record.lifecycle = "removed";
-      record.cleanup = "removed";
-      record.removed_at = new Date().toISOString();
-      delete record.cleanup_error;
-      if (task) task.worktree_removed_at = record.removed_at;
-    } else {
-      record.cleanup = "preserve";
-      record.cleanup_error = result.error;
-    }
-    record.updated_at = new Date().toISOString();
-  });
+function workerKey(workspaceId, paneId) {
+  return `${workspaceId}:${paneId}`;
 }
 
 function event() {
@@ -313,67 +109,34 @@ function event() {
   }
   const data = envelope.data || envelope;
   const workspaceId = data.workspace_id;
+  const paneId = data.pane_id;
   const result = withState((state) => {
-    const found = findTask(state, workspaceId, data.pane_id);
-    if (!found) return null;
-    const exited = envelope.event === "pane.exited";
-    if (exited && found.task.terminal_event) {
-      if (found.task.worktree_removed_at || !["done", "idle"].includes(found.task.status)) return null;
-      return {
-        cleanup: {
-          stage: found.task.stage,
-          path: found.task.worktree,
-          repoRoot: state.worktrees[found.task.worktree]?.repo_root,
-        },
-      };
-    }
+    const worker = state.workers[workerKey(workspaceId, paneId)];
+    if (!worker) return null;
 
+    const exited = envelope.event === "pane.exited";
+    if (exited && terminal.has(worker.status)) return null;
     const status = data.agent_status || (exited ? "unknown" : null);
     if (!status) return null;
-    const eventKey = [envelope.event || data.type, workspaceId, data.pane_id, data.revision || "", status].join(":");
-    if (found.task.last_event_key === eventKey) return null;
+    const eventKey = [envelope.event || data.type, workspaceId, paneId, data.revision || "", status].join(":");
+    if (worker.last_event_key === eventKey) return null;
 
-    found.task.status = status;
-    found.task.last_event_key = eventKey;
-    found.task.updated_at = new Date().toISOString();
-    if (terminal.has(status)) found.task.terminal_event = eventKey;
-    else delete found.task.terminal_event;
-    if (found.task.worktree) {
-      const record = state.worktrees[found.task.worktree] ||= { path: found.task.worktree };
-      Object.assign(record, {
-        managed: true,
-        stage: found.task.stage,
-        workspace_id: workspaceId,
-        tab_id: found.task.tab_id || found.workspace.tab_id,
-        pane_id: data.pane_id,
-        agent_status: status,
-        lifecycle: taskLifecycle(found.task),
-        updated_at: found.task.updated_at,
-      });
-    }
-    if (!terminal.has(status) || !found.workspace.conductor_pane || found.workspace.conductor_pane === data.pane_id) return null;
+    worker.status = status;
+    worker.last_event_key = eventKey;
+    worker.updated_at = new Date().toISOString();
+    if (!terminal.has(status)) return null;
+    if (!worker.parent_pane || worker.parent_pane === paneId) return null;
     return {
-      notification: {
-        pane: found.workspace.conductor_pane,
-        text: `Conductor event: stage ${found.task.stage} is ${status}; pane ${data.pane_id}; worktree ${found.task.worktree || "unknown"}. Read the worker output before advancing.`,
-      },
+      pane: worker.parent_pane,
+      text: `Conductor event: sub-agent ${worker.stage} is ${status}; pane ${paneId}; worktree ${worker.worktree || "unknown"}. Read its report.`,
     };
   });
 
-  if (result?.cleanup?.path) {
+  if (result) {
     try {
-      removeWorktree(result.cleanup.path, result.cleanup.repoRoot);
-      recordCleanup(workspaceId, result.cleanup.stage, result.cleanup.path, { ok: true });
-    } catch (error) {
-      recordCleanup(workspaceId, result.cleanup.stage, result.cleanup.path, {
-        ok: false,
-        error: error.message || String(error),
-      });
-    }
-  }
-  if (result?.notification) {
-    try {
-      submitPrompt(result.notification.pane, result.notification.text);
+      // Herdr 0.7.3 queues literal agent.send input; Enter submits it to Pi.
+      call(["agent", "send", result.pane, result.text], { json: false });
+      call(["pane", "send-keys", result.pane, "enter"], { json: false });
     } catch (error) {
       console.error(error.message || error);
     }
@@ -381,82 +144,38 @@ function event() {
 }
 
 function register(args) {
-  const [stage, pane, worktree, branch, crewAnchor] = args;
+  const [stage, pane, worktree, branch] = args;
   if (!stage || !pane || !worktree || !branch) {
-    throw new Error("usage: register <stage> <pane> <worktree> <branch> [crew-anchor]");
+    throw new Error("usage: register <stage> <pane> <worktree> <branch>");
   }
   const context = invocationContext();
   if (!context.workspaceId || !context.tabId || !context.paneId) {
     throw new Error("Conductor registration requires HERDR_WORKSPACE_ID, HERDR_TAB_ID, and HERDR_PANE_ID");
   }
 
-  const task = withState((state) => {
-    const workspace = state.workspaces[context.workspaceId] ||= {
-      workspace_id: context.workspaceId,
-      tab_id: context.tabId,
-      conductor_pane: context.paneId,
-      crew_anchor: crewAnchor || pane,
-      tasks: {},
-    };
-    workspace.tab_id = context.tabId;
-    workspace.conductor_pane = context.paneId;
-    workspace.crew_anchor = crewAnchor || workspace.crew_anchor || pane;
-    workspace.tasks[stage] = {
+  const worker = withState((state) => {
+    const key = workerKey(context.workspaceId, pane);
+    state.workers[key] = {
       stage,
       pane,
       worktree,
       branch,
+      workspace_id: context.workspaceId,
+      tab_id: context.tabId,
+      parent_pane: context.paneId,
       status: "working",
       created_at: new Date().toISOString(),
     };
-    return workspace.tasks[stage];
+    return state.workers[key];
   });
-  console.log(JSON.stringify(task));
-}
-
-function status(args) {
-  const root = repositoryRoot();
-  if (!root) throw new Error("Conductor status requires the primary Pi pane to be inside a Git worktree");
-  const state = reconcile(root);
-  const worktrees = Object.values(state.worktrees)
-    .filter((worktree) => worktree.repo_root === root && worktree.lifecycle !== "removed")
-    .sort((a, b) => a.path.localeCompare(b.path));
-  const result = {
-    repo_root: root,
-    worktrees,
-    summary: {
-      total: worktrees.length,
-      present: worktrees.filter((worktree) => worktree.present).length,
-      managed: worktrees.filter((worktree) => worktree.managed).length,
-      working: worktrees.filter((worktree) => worktree.present && worktree.lifecycle === "working").length,
-      terminal: worktrees.filter((worktree) => worktree.present && worktree.lifecycle === "terminal").length,
-      cleanup_candidates: worktrees.filter((worktree) => worktree.cleanup === "candidate").length,
-      unmanaged: worktrees.filter((worktree) => !worktree.managed).length,
-      orphaned: worktrees.filter((worktree) => worktree.lifecycle === "orphaned").length,
-    },
-  };
-  if (args.includes("--json")) {
-    console.log(JSON.stringify(result, null, 2));
-    return;
-  }
-  const rows = worktrees.map((worktree) => [
-    worktree.lifecycle,
-    worktree.stage || "-",
-    worktree.agent_status || "-",
-    worktree.branch || "(detached)",
-    worktree.dirty ? "dirty" : "clean",
-    worktree.path,
-  ].join("\t"));
-  console.log(rows.length ? rows.join("\n") : "No active worktrees.");
+  console.log(JSON.stringify(worker));
 }
 
 try {
   const [command, ...args] = process.argv.slice(2);
   if (command === "event") event();
-  else if (command === "reconcile") reconcile();
   else if (command === "register") register(args);
-  else if (command === "status") status(args);
-  else throw new Error("usage: conductor-herdr <event|reconcile|register|status [--json]>");
+  else throw new Error("usage: conductor-herdr <event|register>");
 } catch (error) {
   console.error(error.message || error);
   process.exitCode = 1;
