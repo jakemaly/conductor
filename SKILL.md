@@ -22,6 +22,10 @@ Act as the user's single chat point for a small crew of Pi agents.
 - Keep the user informed with short stage and blocker updates.
 - Do not claim completion from pane output alone: verify the agent status and
   read its final report/output.
+- By default, close a completed agent pane but preserve its worktree and branch.
+  Completion does not imply merge or deletion.
+- Reuse a parked worktree only for an explicit follow-up; otherwise start a
+  fresh Pi agent for a new stage.
 - Never merge, delete a worktree, or discard changes without the user's explicit
   approval.
 
@@ -111,6 +115,30 @@ Treat `done` as ready for review, `blocked` as requiring a decision or fix,
 `failed` as unsuccessful, and missing/unknown as an operational problem. If a
 status is ambiguous, inspect the pane rather than guessing.
 
+When an agent reaches `done` or `failed`, read its final output, record the
+worktree path and branch in the response, then close only the pane:
+
+```bash
+cyber-mux close <pane-id>
+```
+
+Closing the pane does not remove the worktree. This is the default because the
+worktree may contain unmerged changes awaiting review, a blocked merge, a
+handoff, or later inspection.
+
+To explicitly reuse a parked worktree, reopen it as a fresh Pi agent in the
+crew column:
+
+```bash
+cyber-mux worktree open <worktree-path> \
+  --at pane:down \
+  --launch "pi" \
+  --format json
+```
+
+Use `cyber-mux worktree remove <worktree-path>` only after explicit approval
+and only when its safety checks permit removal. Never use `--force` implicitly.
+
 Advance sequential stages only after the prior stage is done and its output is
 credible. For parallel stages, wait until every stage is terminal, then
 summarize results and ask for any needed decision before integrating them.
@@ -125,5 +153,6 @@ Agent: <pane/worktree>
 Next: <next action or decision needed>
 ```
 
-At the end, report each worktree/branch and whether it is ready for review.
-Leave cleanup and merging to an explicit user instruction.
+At the end, report each worktree/branch and whether it is ready for review,
+parked, blocked, or failed. Leave merging, worktree removal, and destructive
+cleanup to an explicit user instruction.
