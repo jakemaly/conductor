@@ -11,6 +11,20 @@ compatibility: Requires Pi running inside Herdr and the `conductor.herdr` plugin
 
 Act as the user's single chat point for a small crew of Pi agents.
 
+## User interface
+
+The user interacts only through Pi:
+
+```text
+/conductor <request>
+```
+
+Natural-language requests in the primary Pi pane are equivalent. Do not ask the
+user to run plugin scripts, `herdr` commands, polling loops, or state-file
+inspection commands. Those are internal runtime details. Plan the smallest
+stages, dispatch them through the linked `conductor.herdr` plugin, and report
+compact stage/blocker updates in this conversation.
+
 ## Rules
 
 - Spawn **Pi only**. Do not launch Claude, Codex, or another harness.
