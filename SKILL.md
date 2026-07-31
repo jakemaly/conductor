@@ -42,21 +42,39 @@ running inside Herdr. Do not silently fall back to tmux.
 Turn the request into the smallest useful stages. Each stage gets one Pi pane
 and one isolated Herdr worktree.
 
-Create a pane/worktree in the current Herdr workspace and tab, split to the right with its own worktree:
+Keep a single layout anchor for the crew:
+
+- The first agent splits right of the Conductor pane with `--at pane:right`.
+- Save that pane's ID as `crew_anchor`.
+- Every later agent splits down from `crew_anchor` with `--at pane:down`.
+- Do not focus worker panes; leave the user's active view on Conductor.
+
+Create the first pane/worktree in the current Herdr workspace and tab:
 
 ```bash
 cyber-mux worktree add \
   --branch "conductor/<short-stage-name>" \
   --label "conductor-<short-stage-name>" \
   --at pane:right \
-  --launch "pi"
+  --launch "pi" \
+  --format json
 ```
 
-Capture the returned pane ID and focus it so the user can watch the agent:
+For each later pane/worktree, pin cyber-mux's split target to the anchor pane:
 
 ```bash
-cyber-mux focus <pane-id>
+CYBER_MUX=herdr CYBER_MUX_PANE=<crew_anchor> \
+  cyber-mux worktree add \
+  --branch "conductor/<short-stage-name>" \
+  --label "conductor-<short-stage-name>" \
+  --at pane:down \
+  --launch "pi" \
+  --format json
 ```
+
+The explicit `CYBER_MUX_PANE` prevents later splits from accidentally targeting
+Conductor or whichever pane is focused. Keep the returned pane IDs for status
+and messaging. Do not call `cyber-mux focus` during normal dispatch.
 
 Then send the agent a concise brief and submit it:
 
@@ -72,8 +90,7 @@ The brief must include:
 4. How the agent should report done, blocked, or failed.
 5. A request not to merge or destroy work.
 
-For parallel work, create all independent right-hand panes first, focus the first or most relevant pane, then submit all briefs. Keep them in the current workspace and tab.
-Do not parallelize stages with dependencies.
+For parallel work, create all independent panes first: one right-hand anchor, then down-splits from that anchor. Keep them in the current workspace and tab, and leave focus on Conductor. Do not parallelize stages with dependencies.
 
 ## Supervision
 
