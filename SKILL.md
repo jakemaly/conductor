@@ -1,16 +1,10 @@
 ---
 name: conductor
-description: >-
-  Create Pi sub-agents in Herdr-native Git worktrees. Trigger for natural-language
-  requests to spawn, launch, delegate, coordinate, or parallelize sub-agents;
-  ordinary single-agent coding does not trigger it.
+description: Delegate independent tasks to Pi sub-agents in Herdr-native Git worktrees.
 compatibility: Requires Pi inside Herdr, `cyber-mux`, and `conductor.herdr`.
 ---
 
 # Conductor
-
-Use this skill when the user asks for sub-agents, workers, delegation, or
-parallel work, with or without `/conductor`.
 
 Create the workers and tasks the user names. Pass each task to its worker as
 written. Keep the parent Pi focused.
