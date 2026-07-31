@@ -1,41 +1,23 @@
 ---
 name: conductor
 description: >-
-  Create explicit Pi sub-agents in Herdr-native Git worktrees. Trigger when the
-  user asks to spawn, create, launch, delegate to, or coordinate sub-agents or
-  workers, including natural-language requests such as "spawn two agents" or
-  "build these in parallel". Do not trigger for ordinary single-agent coding.
+  Create Pi sub-agents in Herdr-native Git worktrees. Trigger for natural-language
+  requests to spawn, launch, delegate, coordinate, or parallelize sub-agents;
+  ordinary single-agent coding does not trigger it.
 compatibility: Requires Pi inside Herdr, `cyber-mux`, and `conductor.herdr`.
 ---
 
 # Conductor
 
-Conductor is a thin sub-agent launcher. It creates Pi workers in Herdr-native
-Git worktrees, records the parent/worker/worktree/branch mapping, routes
-terminal events back to the parent Pi, and reports what each worker says. Herdr
-and Git remain authoritative for live pane and worktree facts. Conductor does
-not maintain a second Git inventory, implement, review, verify, commit, merge,
-clean up, or invent extra stages.
+Use this skill when the user asks for sub-agents, workers, delegation, or
+parallel work, with or without `/conductor`.
 
-## When to use it
+Create the workers and tasks the user names. Pass each task to its worker as
+written. Keep the parent Pi focused.
 
-Invoke this skill when the user explicitly asks in natural language or with
-`/conductor` for sub-agents, workers, delegation, or parallel work. Examples:
+## Preflight
 
-```text
-Spawn two Pi agents: one handles the API and one handles the UI.
-Delegate this investigation to a sub-agent.
-/conductor Run these three independent tasks in parallel.
-```
-
-Do not turn an ordinary single-agent coding request into a Conductor plan.
-Create exactly the workers and tasks the user names. Do not add review, test,
-documentation, cleanup, or other speculative stages. Pass each worker its task
-without prescribing how it should implement the task.
-
-## Preconditions
-
-Check internally before dispatching:
+Run internally:
 
 ```bash
 cyber-mux doctor
@@ -45,16 +27,13 @@ herdr plugin list --json
 git rev-parse --show-toplevel
 ```
 
-Require Herdr-backed `cyber-mux`, Pi's Herdr integration, an enabled
-`conductor.herdr`, and a primary Pi pane inside the target Git worktree. If a
-check fails, report it and do not dispatch. Never fall back to tmux, screen, or
-polling.
+Dispatch only when Herdr-backed `cyber-mux`, Pi's Herdr integration, and the
+enabled `conductor.herdr` plugin are available in a Git worktree.
 
 ## Dispatch
 
-Use one Herdr worktree and Pi pane per explicitly requested worker.
-
-First worker:
+Create one worktree and Pi pane per worker. Put the first to the right of the
+parent:
 
 ```bash
 cyber-mux worktree add \
@@ -65,7 +44,7 @@ cyber-mux worktree add \
   --format json
 ```
 
-For additional workers, split down from the first worker's pane:
+Put later workers below the first worker:
 
 ```bash
 CYBER_MUX=herdr CYBER_MUX_PANE=<first-worker-pane> \
@@ -77,14 +56,13 @@ CYBER_MUX=herdr CYBER_MUX_PANE=<first-worker-pane> \
   --format json
 ```
 
-Submit the user's task to the returned pane. Keep the task text intact; add
-only the worker name or repository scope when needed for clarity:
+Submit the task to the returned pane:
 
 ```bash
-cyber-mux submit <pane-id> '<user task>'
+cyber-mux submit <pane-id> '<task>'
 ```
 
-Only after dispatch and submission succeed, register the worker internally:
+After successful submission, register the worker:
 
 ```bash
 PLUGIN_ROOT=$(herdr plugin list --json | jq -r \
@@ -93,39 +71,19 @@ node "$PLUGIN_ROOT/bin/conductor-herdr.mjs" register \
   <worker-name> <pane-id> <worktree-path> "conductor/<short-name>"
 ```
 
-Registration must use `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and `HERDR_PANE_ID`
-from the parent Pi pane. Never infer workspace identity from global focus. Keep
-focus on the parent pane.
-
-For parallel requests, create all requested workers before waiting. For ordered
-requests, dispatch only the next explicitly requested worker after its
-predecessor reports completion.
+Use `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and `HERDR_PANE_ID` from the parent
+Pi pane. Create all workers before waiting when the user requests parallel
+work; otherwise advance in the requested order.
 
 ## Completion
 
-Herdr's native `pane.agent_status_changed` and `pane.exited` events wake the
-parent Pi. Registered workers may finish as `idle`; treat that as terminal for
-the registered worker. Also report `done`, `blocked`, and `unknown`.
-
-When woken, read the worker's recent output and summarize its own report. Do
-not independently judge correctness or add a verification workflow:
+Herdr's `pane.agent_status_changed` and `pane.exited` events wake the parent.
+Treat registered `idle`, `done`, `blocked`, and `unknown` states as terminal
+signals. Read the worker's report:
 
 ```bash
 herdr agent read <pane-id> --source recent --lines 120
 ```
 
-Leave every worker pane and worktree open after completion. Do not merge, close,
-remove, prune, or discard anything unless the user explicitly asks.
-
-## Reporting
-
-Keep updates factual and compact:
-
-```text
-Worker: <name>
-Status: <Herdr status>
-Pane: <pane id>
-Worktree: <path>
-Branch: <branch>
-Report: <worker's result>
-```
+Leave panes and worktrees open. Report the worker name, status, pane, worktree,
+branch, and its report.
