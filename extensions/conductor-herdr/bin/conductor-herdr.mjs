@@ -4,7 +4,9 @@ import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const herdr = process.env.HERDR_BIN_PATH || "herdr";
-const stateDir = process.env.HERDR_PLUGIN_STATE_DIR || join(process.cwd(), ".conductor-herdr");
+const pluginId = process.env.HERDR_PLUGIN_ID || "conductor.herdr";
+const defaultStateHome = process.env.XDG_STATE_HOME || join(process.env.HOME || process.cwd(), ".local", "state");
+const stateDir = process.env.HERDR_PLUGIN_STATE_DIR || join(defaultStateHome, "herdr", "plugins", pluginId);
 const statePath = join(stateDir, "conductor.json");
 const terminal = new Set(["done", "blocked", "unknown"]);
 
