@@ -16,6 +16,4 @@ its own pane, worktree, and `conductor/<name>` branch.
 
 ## How to use
 
-Ask in natural language, for example: `Spawn two agents: one handles the API
-and one handles the UI.` Conductor launches them and leaves their panes and
-worktrees available for inspection or integration.
+Ask in natural language, for example: `Spawn two agents: one handles the API and one handles the UI.` Conductor launches them and leaves panes and worktrees available.
