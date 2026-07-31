@@ -1,24 +1,34 @@
 ---
 name: conductor
 description: >-
-  Create explicit Pi sub-agents in Herdr-native Git worktrees. Use only when
-  the user asks to delegate work to sub-agents.
+  Create explicit Pi sub-agents in Herdr-native Git worktrees. Trigger when the
+  user asks to spawn, create, launch, delegate to, or coordinate sub-agents or
+  workers, including natural-language requests such as "spawn two agents" or
+  "build these in parallel". Do not trigger for ordinary single-agent coding.
 compatibility: Requires Pi inside Herdr, `cyber-mux`, and `conductor.herdr`.
 ---
 
 # Conductor
 
 Conductor is a thin sub-agent launcher. It creates Pi workers in Herdr-native
-Git worktrees, routes their terminal events back to the parent Pi, and reports
-what each worker says. It does not implement, review, verify, commit, merge,
+Git worktrees, records the parent/worker/worktree/branch mapping, routes
+terminal events back to the parent Pi, and reports what each worker says. Herdr
+and Git remain authoritative for live pane and worktree facts. Conductor does
+not maintain a second Git inventory, implement, review, verify, commit, merge,
 clean up, or invent extra stages.
 
 ## When to use it
 
-Use `/conductor <request>` only when the user explicitly asks for sub-agents,
-workers, delegation, or parallel work. Do not turn an ordinary coding request
-into a Conductor plan.
+Invoke this skill when the user explicitly asks in natural language or with
+`/conductor` for sub-agents, workers, delegation, or parallel work. Examples:
 
+```text
+Spawn two Pi agents: one handles the API and one handles the UI.
+Delegate this investigation to a sub-agent.
+/conductor Run these three independent tasks in parallel.
+```
+
+Do not turn an ordinary single-agent coding request into a Conductor plan.
 Create exactly the workers and tasks the user names. Do not add review, test,
 documentation, cleanup, or other speculative stages. Pass each worker its task
 without prescribing how it should implement the task.

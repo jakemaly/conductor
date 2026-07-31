@@ -115,7 +115,11 @@ function event() {
     if (!worker) return null;
 
     const exited = envelope.event === "pane.exited";
-    if (exited && terminal.has(worker.status)) return null;
+    if (exited && terminal.has(worker.status)) {
+      worker.pane_exited_at ||= new Date().toISOString();
+      worker.updated_at = new Date().toISOString();
+      return null;
+    }
     const status = data.agent_status || (exited ? "unknown" : null);
     if (!status) return null;
     const eventKey = [envelope.event || data.type, workspaceId, paneId, data.revision || "", status].join(":");

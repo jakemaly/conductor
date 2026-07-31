@@ -65,6 +65,11 @@ export HERDR_PLUGIN_EVENT_JSON='{"event":"pane.exited","data":{"workspace_id":"r
 node "$root/bin/conductor-herdr.mjs" event
 sends=$(grep -c '^agent send conductor:p1 ' "$HERDR_CALLS")
 if [ "$sends" -ne 1 ]; then echo 'duplicate terminal event woke parent' >&2; exit 1; fi
+node - <<'EOF'
+const fs = require('node:fs');
+const s = JSON.parse(fs.readFileSync(process.env.HERDR_PLUGIN_STATE_DIR + '/conductor.json'));
+if (!s.workers['repo:worker:p1'].pane_exited_at) throw new Error('pane exit was not recorded');
+EOF
 
 # An unexpected exit wakes the parent as unknown and leaves the worker mapping.
 rm -rf "$HERDR_PLUGIN_STATE_DIR"; mkdir -p "$HERDR_PLUGIN_STATE_DIR"
