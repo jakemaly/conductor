@@ -22,6 +22,20 @@ Users say:
 Natural-language requests in the primary Pi pane are equivalent. Do not ask
 users to run Herdr, plugin, polling, or state-file commands.
 
+If the request is exactly `status`, do not dispatch work. Reconcile and render
+the plugin inventory instead:
+
+```bash
+PLUGIN_ROOT=$(herdr plugin list --json | jq -r \
+  '.result.plugins[] | select(.plugin_id == "conductor.herdr") | .plugin_root')
+REPO_ROOT=$(git rev-parse --show-toplevel)
+CONDUCTOR_REPO_ROOT="$REPO_ROOT" \
+  node "$PLUGIN_ROOT/bin/conductor-herdr.mjs" status --json
+```
+
+Report the returned worktree, lifecycle, agent, branch, dirty, and cleanup
+fields directly. Do not infer or invent missing facts.
+
 ## Translate the request
 
 Before dispatching, turn the request into a small plan. Show the plan briefly
@@ -57,6 +71,7 @@ especially requests not to commit, merge, or delete.
 - Never merge to the user's branch unless explicitly requested.
 - Close completed panes. Remove their worktrees only when cleanup is safe.
 - Preserve blocked, failed, dirty, or explicitly retained worktrees.
+- Treat the plugin inventory as the source of truth for worktree status.
 
 ## Preconditions
 

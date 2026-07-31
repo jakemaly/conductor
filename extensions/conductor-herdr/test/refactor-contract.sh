@@ -8,7 +8,8 @@ cat >"$tmp/herdr" <<'EOF'
 set -euo pipefail
 case "$1 $2" in
   "api snapshot")
-    printf '%s\n' '{"result":{"snapshot":{"focused_pane_id":"wrong:p1","focused_workspace_id":"wrong","focused_tab_id":"wrong:t1","panes":[{"pane_id":"worker:p1","workspace_id":"repo","tab_id":"repo:t1","cwd":"/repo","agent_status":"idle"}]}}}'
+    worker_cwd=$(printf '%s' "${HERDR_TEST_WORKTREE:-/repo}" | jq -Rsa .)
+    printf '%s\n' "{\"result\":{\"snapshot\":{\"focused_pane_id\":\"wrong:p1\",\"focused_workspace_id\":\"wrong\",\"focused_tab_id\":\"wrong:t1\",\"panes\":[{\"pane_id\":\"worker:p1\",\"workspace_id\":\"repo\",\"tab_id\":\"repo:t1\",\"cwd\":$worker_cwd,\"agent_status\":\"idle\"}]}}}"
     ;;
   *) printf '%s\n' "$*" >> "$HERDR_CALLS" ;;
 esac
@@ -93,6 +94,29 @@ const s = JSON.parse(fs.readFileSync(process.env.HERDR_PLUGIN_STATE_DIR + '/cond
 if (s.workspaces.repo.tasks['stage-1'].status !== 'idle') throw new Error('pane exit downgraded completed task');
 const calls = fs.readFileSync(process.env.HERDR_CALLS, 'utf8').split('\n').filter(Boolean);
 if (calls.filter((call) => call.startsWith('agent send conductor:p1 ')).length !== 1) throw new Error('pane exit sent duplicate wakeup');
+EOF
+
+# Status must be a reconciled inventory of real Git worktrees plus Herdr facts.
+repo="$tmp/repo"
+mkdir -p "$repo"
+git init -q "$repo"
+printf 'status\n' > "$repo/README"
+git -C "$repo" add README
+git -C "$repo" -c user.name=test -c user.email=test@example.com commit -qm init
+git -C "$repo" worktree add -q -b conductor/status "$tmp/status-worktree"
+export HERDR_TEST_WORKTREE="$tmp/status-worktree"
+rm -rf "$HERDR_PLUGIN_STATE_DIR"; mkdir -p "$HERDR_PLUGIN_STATE_DIR"
+HERDR_WORKSPACE_ID=repo HERDR_TAB_ID=repo:t1 HERDR_PANE_ID=conductor:p1 \
+  node "$root/bin/conductor-herdr.mjs" register \
+  status-stage worker:p1 "$tmp/status-worktree" conductor/status crew:p1 >/dev/null
+status_json=$(cd "$repo" && node "$root/bin/conductor-herdr.mjs" status --json)
+STATUS_JSON="$status_json" STATUS_WORKTREE="$tmp/status-worktree" node - <<'EOF'
+const data = JSON.parse(process.env.STATUS_JSON);
+const worktree = data.worktrees.find((item) => item.path === process.env.STATUS_WORKTREE);
+if (data.summary.total !== 2) throw new Error('status did not inventory both worktrees');
+if (!worktree || worktree.branch !== 'conductor/status') throw new Error('status lost Git branch facts');
+if (!worktree.managed || worktree.pane_id !== 'worker:p1') throw new Error('status lost Conductor/Herdr mapping');
+if (worktree.dirty || worktree.lifecycle !== 'terminal') throw new Error('status reported incorrect lifecycle facts');
 EOF
 
 echo 'refactor contract: ok'
